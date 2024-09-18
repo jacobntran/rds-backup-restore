@@ -19,6 +19,10 @@ variable "db_password" {
   description = "Password for your rds instance user"
 }
 
+variable "bucket_name" {
+  description = "Name of the bucket used for RDS backups"
+}
+
 output "bastion_host_public_ip" {
   value = aws_instance.bastion.public_ip
 }
@@ -171,6 +175,7 @@ resource "aws_instance" "app" {
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.app.id]
   subnet_id              = aws_subnet.compute.id
+  iam_instance_profile   = aws_iam_instance_profile.this.name
 
   tags = {
     Name = "Application Host"
@@ -229,5 +234,90 @@ resource "aws_security_group" "db" {
     to_port     = 5432
     protocol    = "tcp"
     cidr_blocks = [aws_subnet.compute.cidr_block]
+  }
+}
+
+### PERMISSIONS ###
+resource "aws_iam_role" "ec2_instance" {
+  name = "ec2_instance"
+
+  assume_role_policy = jsonencode(
+    {
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Action = "sts:AssumeRole"
+          Effect = "Allow"
+          Sid    = ""
+          Principal = {
+            Service = "ec2.amazonaws.com"
+          }
+        },
+      ]
+    }
+  )
+}
+
+resource "aws_iam_role_policy" "ec2_instance" {
+  name = "ec2_instance_profile"
+  role = aws_iam_role.ec2_instance.id
+
+  policy = jsonencode(
+    {
+      "Version" : "2012-10-17",
+      "Statement" : [
+        {
+          "Effect" : "Allow",
+          "Action" : [
+            "s3:ListBucket"
+          ],
+          "Resource" : "arn:aws:s3:::${var.bucket_name}"
+        },
+        {
+          "Effect" : "Allow",
+          "Action" : [
+            "s3:GetObject",
+            "s3:PutObject"
+          ],
+          "Resource" : "arn:aws:s3:::${var.bucket_name}/*"
+        },
+        {
+          "Effect" : "Allow",
+          "Action" : [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey"
+          ],
+          "Resource" : aws_kms_key.s3.arn
+        }
+      ]
+    }
+  )
+}
+
+resource "aws_iam_instance_profile" "this" {
+  name = "ec2_instance_profile"
+  role = aws_iam_role.ec2_instance.name
+}
+
+### STORAGE ###
+resource "aws_kms_key" "s3" {
+  description = "This key is used for encrypting my S3 objects"
+}
+
+resource "aws_s3_bucket" "backups" {
+  bucket = var.bucket_name
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "kms" {
+  bucket = aws_s3_bucket.backups.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.s3.arn
+      sse_algorithm     = "aws:kms"
+    }
   }
 }
