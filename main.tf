@@ -11,12 +11,24 @@ variable "my_ip" {
   description = "Your public ip address"
 }
 
+variable "db_username" {
+  description = "Username for your rds instance user"
+}
+
+variable "db_password" {
+  description = "Password for your rds instance user"
+}
+
 output "bastion_host_public_ip" {
   value = aws_instance.bastion.public_ip
 }
 
 output "application_host_private_ip" {
   value = aws_instance.app.private_ip
+}
+
+output "rds_endpoint" {
+  value = aws_db_instance.this.endpoint
 }
 
 ### NETWORKING ###
@@ -51,7 +63,17 @@ resource "aws_subnet" "db" {
   availability_zone = "us-west-1b"
 
   tags = {
-    Name = "Database Subnet"
+    Name = "Database Subnet 1"
+  }
+}
+
+resource "aws_subnet" "db_2" {
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = "10.0.0.48/28"
+  availability_zone = "us-west-1c"
+
+  tags = {
+    Name = "Database Subnet 2"
   }
 }
 
@@ -106,12 +128,12 @@ resource "aws_route_table_association" "compute" {
 
 ### SERVICES ###
 resource "aws_instance" "bastion" {
-  ami               = "ami-0d53d72369335a9d6"
-  availability_zone = "us-west-1b"
-  instance_type     = "t2.micro"
-  key_name          = var.key_name
-  security_groups   = [aws_security_group.bastion.id]
-  subnet_id         = aws_subnet.public.id
+  ami                    = "ami-0d53d72369335a9d6"
+  availability_zone      = "us-west-1b"
+  instance_type          = "t2.micro"
+  key_name               = var.key_name
+  vpc_security_group_ids = [aws_security_group.bastion.id]
+  subnet_id              = aws_subnet.public.id
 
   tags = {
     Name = "Bastion Host"
@@ -143,12 +165,12 @@ resource "aws_security_group" "bastion" {
 }
 
 resource "aws_instance" "app" {
-  ami               = "ami-0d53d72369335a9d6"
-  availability_zone = "us-west-1b"
-  instance_type     = "t2.micro"
-  key_name          = var.key_name
-  security_groups   = [aws_security_group.app.id]
-  subnet_id         = aws_subnet.compute.id
+  ami                    = "ami-0d53d72369335a9d6"
+  availability_zone      = "us-west-1b"
+  instance_type          = "t2.micro"
+  key_name               = var.key_name
+  vpc_security_group_ids = [aws_security_group.app.id]
+  subnet_id              = aws_subnet.compute.id
 
   tags = {
     Name = "Application Host"
@@ -176,5 +198,36 @@ resource "aws_security_group" "app" {
 
   tags = {
     Name = "Application Host Security Group"
+  }
+}
+
+### DATA ###
+resource "aws_db_instance" "this" {
+  allocated_storage      = 20
+  availability_zone      = "us-west-1b"
+  engine                 = "postgres"
+  instance_class         = "db.t3.micro"
+  username               = var.db_username
+  password               = var.db_password
+  skip_final_snapshot    = true
+  vpc_security_group_ids = [aws_security_group.db.id]
+  db_subnet_group_name   = aws_db_subnet_group.this.name
+}
+
+resource "aws_db_subnet_group" "this" {
+  name       = "my-db-subnet-group"
+  subnet_ids = [aws_subnet.db.id, aws_subnet.db_2.id]
+}
+
+resource "aws_security_group" "db" {
+  name        = "rds_host_security_group"
+  description = "Allow PostgreSQL traffic"
+  vpc_id      = aws_vpc.this.id
+
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [aws_subnet.compute.cidr_block]
   }
 }
